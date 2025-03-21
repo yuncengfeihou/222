@@ -1,0 +1,48 @@
+#prompt_structure_exporter_settings .flex-container {
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+#prompt_structure_exporter_settings .menu_button {
+    background-color: #2d69b7;
+    color: white;
+    padding: 8px 15px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+#prompt_structure_exporter_settings .menu_button:hover {
+    background-color: #1d4a8a;
+}
+
+#prompt_exporter_clear_counter {
+    background-color: #777 !important;
+    margin-left: 10px;
+    font-size: 0.9em;
+    padding: 5px 10px !important;
+}
+
+#prompt_exporter_clear_counter:hover {
+    background-color: #555 !important;
+}
+
+#prompt_exporter_capture_count {
+    font-weight: bold;
+    padding: 0 5px;
+}
+
+#prompt_structure_exporter_settings .checkbox_label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    width: 100%;
+    justify-content: flex-start;
+}
+
+#prompt_structure_exporter_settings .checkbox_label input {
+    margin-right: 10px;
+}

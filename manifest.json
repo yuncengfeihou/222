@@ -1,12 +1,12 @@
 {
-    "display_name": "提示词结构导出2.0",
+    "display_name": "提示词结构导出3.0",
     "loading_order": 100,
     "requires": [],
     "optional": [],
     "js": "index.js",
     "css": "style.css",
     "author": "Claude",
-    "version": "1.0.0",
+    "version": "1.2.0",
     "homePage": "https://github.com/yourusername/st-prompt-structure-exporter",
     "auto_update": false
 }

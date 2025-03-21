@@ -1,50 +1,43 @@
-.prompt-exporter-settings .menu_button {
-    background-color: #1f6aa5;
-    color: white;
-    padding: 8px 15px;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    margin: 5px;
-    transition: background-color 0.3s;
+.prompt-exporter-settings .prompt-exporter-block {
+    padding: 10px;
+    margin-bottom: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
 }
 
-.prompt-exporter-settings .menu_button:hover {
-    background-color: #2980b9;
+.prompt-exporter-settings .prompt-exporter-buttons {
+    display: flex;
+    gap: 10px;
+    margin: 10px 0;
+    flex-wrap: wrap;
+    justify-content: center;
 }
 
-.prompt-exporter-settings .checkbox_label {
-    margin-right: 15px;
-}
-
-.prompt-exporter-settings .mt-4 {
-    margin-top: 10px;
-}
-
-.prompt-exporter-settings pre {
-    background-color: #f5f5f5;
+.prompt-exporter-status {
+    background-color: rgba(0, 0, 0, 0.1);
     padding: 10px;
     border-radius: 5px;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    text-align: left;
-    max-width: 100%;
     font-family: monospace;
+    margin: 10px 0;
 }
 
-.prompt-exporter-settings .w-100p {
-    width: 100%;
+.prompt-exporter-status .success {
+    color: #4CAF50;
+    font-weight: bold;
 }
 
-.prompt-exporter-settings .flexNoGap {
-    gap: 0;
+.prompt-exporter-status .failure {
+    color: #f44336;
+    font-weight: bold;
 }
 
-.prompt-exporter-settings .justifyLeft {
-    justify-content: flex-start;
-    text-align: left;
+.prompt-exporter-settings .menu_button {
+    min-width: 120px;
 }
 
-.prompt-exporter-settings p {
-    margin: 5px 0;
+/* 弹窗样式优化 */
+.popup_prompt_exporter {
+    max-width: 90vw;
+    max-height: 90vh;
 }

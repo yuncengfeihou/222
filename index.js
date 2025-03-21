@@ -1,250 +1,399 @@
 import { extension_settings, loadExtensionSettings } from "../../../extensions.js";
-import { saveSettingsDebounced } from "../../../../script.js";
-import { eventSource, event_types } from "../../../../script.js";
-import { download } from "../../../utils.js";
-import { callPopup, isMobile } from "../../../../script.js";
+import { saveSettingsDebounced, eventSource, event_types } from "../../../../script.js";
+import { Popup } from "../../../popup.js";
 
-// 插件名称，需要与文件夹名一致
-const extensionName = "prompt-structure-exporter";
-
-// 插件设置初始化
+// 插件名称（必须与文件夹名称一致）
+const extensionName = "prompt-exporter";
+// 设置对象引用
+const extensionSettings = extension_settings[extensionName] = extension_settings[extensionName] || {};
+// 默认设置
 const defaultSettings = {
     enabled: true,
-    autoExport: false,
-    exportLocation: "",
-    lastExportTimestamp: 0,
+    autoDownload: false,
+    logToConsole: false
 };
 
-// 初始化插件设置
+// 记录当前捕获的prompt结构
+let currentPromptStruct = null;
+// 记录插件状态
+let pluginState = {
+    isCapturing: false,
+    lastCaptureTime: null,
+    captureCount: 0,
+    errors: []
+};
+
+/**
+ * 加载插件设置
+ */
 function loadSettings() {
-    console.log(`${extensionName}: 正在加载设置`);
-    extension_settings[extensionName] = extension_settings[extensionName] || {};
-    if (Object.keys(extension_settings[extensionName]).length === 0) {
-        Object.assign(extension_settings[extensionName], defaultSettings);
-        console.log(`${extensionName}: 使用默认设置初始化`);
+    // 确保存在设置对象
+    if (Object.keys(extensionSettings).length === 0) {
+        Object.assign(extensionSettings, defaultSettings);
+        saveSettingsDebounced();
     }
     
-    // 更新UI状态
-    $('#prompt_exporter_enabled').prop('checked', extension_settings[extensionName].enabled);
-    $('#prompt_auto_export').prop('checked', extension_settings[extensionName].autoExport);
-    $('#prompt_export_location').val(extension_settings[extensionName].exportLocation);
-    updateLastExportTime();
+    // 更新UI以匹配设置
+    $('#prompt_exporter_enabled').prop('checked', extensionSettings.enabled);
+    $('#prompt_exporter_auto_download').prop('checked', extensionSettings.autoDownload);
+    $('#prompt_exporter_log_console').prop('checked', extensionSettings.logToConsole);
+    
+    // 记录设置加载
+    console.log(`[${extensionName}] 设置已加载:`, extensionSettings);
 }
 
-function updateLastExportTime() {
-    const timestamp = extension_settings[extensionName].lastExportTimestamp;
-    if (timestamp) {
-        const date = new Date(timestamp);
-        $('#last_export_time').text(date.toLocaleString());
-    } else {
-        $('#last_export_time').text('尚未导出');
+/**
+ * 输出日志（根据设置决定是否显示）
+ */
+function logDebug(...args) {
+    if (extensionSettings.logToConsole) {
+        console.log(`[${extensionName}]`, ...args);
     }
 }
 
-// 导出提示词结构
-async function exportPromptStructure(promptStruct, fromAutoExport = false) {
-    try {
-        if (!promptStruct) {
-            console.error(`${extensionName}: 提示词结构为空，无法导出`);
-            toastr.error('提示词结构为空，无法导出', '导出失败');
-            return false;
-        }
+/**
+ * 记录错误
+ */
+function logError(error, context) {
+    const errorInfo = {
+        time: new Date().toISOString(),
+        message: error.message || String(error),
+        stack: error.stack,
+        context: context
+    };
+    
+    pluginState.errors.push(errorInfo);
+    
+    // 限制错误历史记录数量
+    if (pluginState.errors.length > 10) {
+        pluginState.errors.shift();
+    }
+    
+    console.error(`[${extensionName}] 错误:`, errorInfo);
+    return errorInfo;
+}
 
-        console.log(`${extensionName}: 准备导出提示词结构`, promptStruct);
+/**
+ * 将数据保存为文件并提供下载
+ */
+function saveToFile(data, filename) {
+    try {
+        // 创建Blob对象
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
         
-        // 创建JSON字符串
-        const jsonString = JSON.stringify(promptStruct, null, 2);
+        // 创建下载链接
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename || `prompt_struct_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+        document.body.appendChild(a);
+        a.click();
         
-        // 生成文件名 (使用角色ID和时间戳)
-        const timestamp = Date.now();
-        extension_settings[extensionName].lastExportTimestamp = timestamp;
-        saveSettingsDebounced();
-        updateLastExportTime();
+        // 清理
+        setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }, 100);
         
-        const charName = promptStruct.Charname || 'unknown';
-        const fileName = `prompt_structure_${charName}_${timestamp}.json`;
-        
-        // 下载文件
-        download(jsonString, fileName, 'application/json');
-        
-        if (!fromAutoExport) {
-            toastr.success('提示词结构已成功导出', '导出成功');
-        }
-        
-        console.log(`${extensionName}: 提示词结构导出成功 - ${fileName}`);
+        logDebug('文件已保存:', filename);
+        toastr.success(`提示词结构已导出为 ${filename}`, '导出成功');
         return true;
     } catch (error) {
-        console.error(`${extensionName}: 导出提示词结构时出错`, error);
-        if (!fromAutoExport) {
-            toastr.error(`导出失败: ${error.message}`, '导出错误');
-        }
+        const errorInfo = logError(error, 'saveToFile');
+        toastr.error(`保存文件失败: ${errorInfo.message}`, '导出错误');
         return false;
     }
 }
 
-// 用于存储捕获到的最新提示词结构
-let lastCapturedPromptStruct = null;
-
-// 监听提示词准备完成事件
-function setupEventListeners() {
-    console.log(`${extensionName}: 设置事件监听器`);
-    
-    // 监听提示词准备完成事件
-    eventSource.on(event_types.CHAT_COMPLETION_PROMPT_READY, (data) => {
-        try {
-            if (!extension_settings[extensionName].enabled) {
-                console.log(`${extensionName}: 插件已禁用，不捕获提示词结构`);
-                return;
-            }
-            
-            console.log(`${extensionName}: 捕获到CHAT_COMPLETION_PROMPT_READY事件`, data);
-            
-            if (data && data.prompt_struct) {
-                lastCapturedPromptStruct = structuredClone(data.prompt_struct);
-                console.log(`${extensionName}: 成功捕获提示词结构`);
-                
-                // 如果启用了自动导出
-                if (extension_settings[extensionName].autoExport) {
-                    console.log(`${extensionName}: 自动导出已启用，正在导出提示词结构`);
-                    exportPromptStructure(lastCapturedPromptStruct, true);
-                }
-            } else {
-                console.warn(`${extensionName}: 无法捕获提示词结构，数据格式不符合预期`);
-            }
-        } catch (error) {
-            console.error(`${extensionName}: 处理CHAT_COMPLETION_PROMPT_READY事件时出错`, error);
-        }
-    });
-}
-
-// 手动导出提示词结构的按钮点击事件
-function onExportButtonClick() {
-    if (!lastCapturedPromptStruct) {
-        console.warn(`${extensionName}: 尚未捕获提示词结构，无法导出`);
-        toastr.warning('尚未捕获提示词结构。请先发送一条消息，然后再尝试导出。', '无可导出数据');
-        return;
-    }
-    
-    console.log(`${extensionName}: 手动导出提示词结构`);
-    exportPromptStructure(lastCapturedPromptStruct);
-}
-
-// 切换插件启用状态
-function onEnabledChange(event) {
-    const enabled = $(event.target).prop('checked');
-    extension_settings[extensionName].enabled = enabled;
-    console.log(`${extensionName}: 插件${enabled ? '启用' : '禁用'}`);
-    saveSettingsDebounced();
-}
-
-// 切换自动导出
-function onAutoExportChange(event) {
-    const autoExport = $(event.target).prop('checked');
-    extension_settings[extensionName].autoExport = autoExport;
-    console.log(`${extensionName}: 自动导出${autoExport ? '启用' : '禁用'}`);
-    saveSettingsDebounced();
-}
-
-// 更改导出位置
-function onExportLocationChange(event) {
-    const location = $(event.target).val();
-    extension_settings[extensionName].exportLocation = location;
-    console.log(`${extensionName}: 导出位置更改为 "${location}"`);
-    saveSettingsDebounced();
-}
-
-// 查看结构按钮点击事件
-async function onViewStructureClick() {
-    if (!lastCapturedPromptStruct) {
-        console.warn(`${extensionName}: 尚未捕获提示词结构，无法查看`);
-        toastr.warning('尚未捕获提示词结构。请先发送一条消息，然后再尝试查看。', '无可查看数据');
-        return;
-    }
-    
+/**
+ * 捕获提示词结构并处理
+ */
+function capturePromptStruct(data) {
     try {
-        console.log(`${extensionName}: 准备在弹窗中显示提示词结构`);
+        if (!extensionSettings.enabled) {
+            return false;
+        }
         
-        // 格式化JSON以便于查看
-        const prettyJson = JSON.stringify(lastCapturedPromptStruct, null, 2);
+        pluginState.isCapturing = true;
+        pluginState.lastCaptureTime = new Date();
+        pluginState.captureCount++;
         
-        // 创建包含代码块的HTML
-        const htmlContent = `
-            <div style="max-height: 70vh; overflow-y: auto;">
-                <pre style="white-space: pre-wrap; word-wrap: break-word; text-align: left; max-width: 100%;">${prettyJson}</pre>
-            </div>
+        // 提取完整的提示结构数据
+        const promptStruct = data.eventData?.chat?.prompt_struct || null;
+        
+        if (!promptStruct) {
+            logDebug('未找到提示词结构数据');
+            pluginState.isCapturing = false;
+            return false;
+        }
+        
+        // 存储当前捕获的提示结构
+        currentPromptStruct = promptStruct;
+        
+        logDebug('成功捕获提示词结构:', promptStruct);
+        
+        // 如果设置了自动下载，则立即导出文件
+        if (extensionSettings.autoDownload) {
+            const filename = `prompt_struct_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+            saveToFile(promptStruct, filename);
+        }
+        
+        // 更新状态UI
+        updateStatusUI();
+        
+        pluginState.isCapturing = false;
+        return true;
+    } catch (error) {
+        pluginState.isCapturing = false;
+        const errorInfo = logError(error, 'capturePromptStruct');
+        toastr.error(`捕获提示词结构失败: ${errorInfo.message}`, '捕获错误');
+        return false;
+    }
+}
+
+/**
+ * 更新状态UI显示
+ */
+function updateStatusUI() {
+    const statusElement = $('#prompt_exporter_status');
+    
+    if (!statusElement.length) {
+        return;
+    }
+    
+    const lastCapture = pluginState.lastCaptureTime ? 
+        new Date(pluginState.lastCaptureTime).toLocaleTimeString() : 
+        '从未';
+    
+    statusElement.html(`
+        <div>状态：${extensionSettings.enabled ? '<span class="success">已启用</span>' : '<span class="failure">已禁用</span>'}</div>
+        <div>捕获次数：${pluginState.captureCount}</div>
+        <div>最近捕获：${lastCapture}</div>
+        <div>错误数：${pluginState.errors.length}</div>
+    `);
+}
+
+/**
+ * 显示当前捕获的提示词结构
+ */
+function viewCurrentPromptStruct() {
+    try {
+        if (!currentPromptStruct) {
+            toastr.info('当前没有捕获的提示词结构数据');
+            return;
+        }
+        
+        // 创建一个格式化的JSON文本展示
+        const formattedJson = JSON.stringify(currentPromptStruct, null, 2);
+        const content = `
+            <div style="max-height: 70vh; overflow-y: auto; white-space: pre; font-family: monospace; background: #f5f5f5; padding: 10px; border-radius: 5px;">${
+                formattedJson.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            }</div>
         `;
         
-        // 显示弹窗
-        await callPopup(htmlContent, 'text', '', { wide: true, large: true });
+        // 使用弹窗显示
+        const popup = new Popup({
+            title: '提示词结构查看器',
+            content: content,
+            wide: true,
+            large: true,
+            buttons: [
+                {
+                    text: '导出为文件',
+                    class: 'menu_button',
+                    click: () => {
+                        const filename = `prompt_struct_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+                        saveToFile(currentPromptStruct, filename);
+                    }
+                },
+                {
+                    text: '关闭',
+                    class: 'menu_button',
+                    click: () => {
+                        popup.hide();
+                    }
+                }
+            ]
+        });
         
+        popup.show();
     } catch (error) {
-        console.error(`${extensionName}: 查看提示词结构时出错`, error);
-        toastr.error(`查看失败: ${error.message}`, '查看错误');
+        const errorInfo = logError(error, 'viewCurrentPromptStruct');
+        toastr.error(`查看提示词结构失败: ${errorInfo.message}`, '查看错误');
     }
 }
 
-// 插件初始化
+/**
+ * 显示错误历史记录
+ */
+function viewErrorHistory() {
+    try {
+        if (pluginState.errors.length === 0) {
+            toastr.info('没有错误记录');
+            return;
+        }
+        
+        // 创建错误历史记录展示
+        let content = '<div style="max-height: 70vh; overflow-y: auto; font-family: monospace;">';
+        
+        pluginState.errors.forEach((error, index) => {
+            content += `
+                <div style="margin-bottom: 15px; border-bottom: 1px solid #ccc; padding-bottom: 10px;">
+                    <div><strong>时间:</strong> ${error.time}</div>
+                    <div><strong>错误:</strong> ${error.message}</div>
+                    ${error.context ? `<div><strong>上下文:</strong> ${error.context}</div>` : ''}
+                    ${error.stack ? `<div><strong>堆栈:</strong> <pre style="margin: 5px 0; white-space: pre-wrap;">${error.stack}</pre></div>` : ''}
+                </div>
+            `;
+        });
+        
+        content += '</div>';
+        
+        // 使用弹窗显示
+        const popup = new Popup({
+            title: '错误历史记录',
+            content: content,
+            wide: true,
+            buttons: [
+                {
+                    text: '清除错误历史',
+                    class: 'menu_button',
+                    click: () => {
+                        pluginState.errors = [];
+                        updateStatusUI();
+                        popup.hide();
+                        toastr.success('错误历史已清除');
+                    }
+                },
+                {
+                    text: '关闭',
+                    class: 'menu_button',
+                    click: () => {
+                        popup.hide();
+                    }
+                }
+            ]
+        });
+        
+        popup.show();
+    } catch (error) {
+        logError(error, 'viewErrorHistory');
+        toastr.error(`查看错误历史失败: ${error.message}`, '查看错误');
+    }
+}
+
+/**
+ * 初始化事件监听器
+ */
+function initEventListeners() {
+    try {
+        // 监听聊天提示生成事件
+        eventSource.on(event_types.CHAT_COMPLETION_PROMPT_READY, (eventData) => {
+            logDebug('检测到CHAT_COMPLETION_PROMPT_READY事件');
+            capturePromptStruct({ eventData });
+        });
+        
+        // 监听UI元素
+        $(document).on('click', '#prompt_exporter_enabled', function() {
+            extensionSettings.enabled = !!$(this).prop('checked');
+            saveSettingsDebounced();
+            updateStatusUI();
+        });
+        
+        $(document).on('click', '#prompt_exporter_auto_download', function() {
+            extensionSettings.autoDownload = !!$(this).prop('checked');
+            saveSettingsDebounced();
+        });
+        
+        $(document).on('click', '#prompt_exporter_log_console', function() {
+            extensionSettings.logToConsole = !!$(this).prop('checked');
+            saveSettingsDebounced();
+        });
+        
+        $(document).on('click', '#prompt_exporter_view_button', function() {
+            viewCurrentPromptStruct();
+        });
+        
+        $(document).on('click', '#prompt_exporter_export_button', function() {
+            if (currentPromptStruct) {
+                const filename = `prompt_struct_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+                saveToFile(currentPromptStruct, filename);
+            } else {
+                toastr.info('当前没有捕获的提示词结构数据');
+            }
+        });
+        
+        $(document).on('click', '#prompt_exporter_errors_button', function() {
+            viewErrorHistory();
+        });
+        
+        logDebug('事件监听器已初始化');
+    } catch (error) {
+        logError(error, 'initEventListeners');
+    }
+}
+
+// 主入口函数
 jQuery(async () => {
-    console.log(`${extensionName}: 插件初始化`);
-    
-    // 创建设置UI
-    const settingsHtml = `<div class="prompt-exporter-settings">
-        <div class="inline-drawer">
-            <div class="inline-drawer-toggle inline-drawer-header">
-                <b>提示词结构导出工具</b>
-                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-            </div>
-            <div class="inline-drawer-content">
-                <div class="flex-container alignitems-center">
-                    <label class="checkbox_label toggle-description" for="prompt_exporter_enabled">
-                        <input type="checkbox" id="prompt_exporter_enabled" name="prompt_exporter_enabled">
-                        <span>启用捕获</span>
-                    </label>
-                    <label class="checkbox_label toggle-description" for="prompt_auto_export">
-                        <input type="checkbox" id="prompt_auto_export" name="prompt_auto_export">
-                        <span>自动导出</span>
-                    </label>
-                </div>
-                
-                <div class="flex-container mt-4">
-                    <input id="prompt_export_button" class="menu_button" type="button" value="导出提示词结构" />
-                    <input id="prompt_view_button" class="menu_button" type="button" value="查看提示词结构" />
-                </div>
-                
-                <div class="flex-container mt-4">
-                    <div>最后导出时间: <span id="last_export_time">尚未导出</span></div>
-                </div>
-                
-                <hr class="sysHR">
-                
-                <div class="flex-container flexFlowColumn alignitems-center">
-                    <div class="flex-container flexNoGap flexFlowColumn" style="text-align: left; margin-top: 10px;">
-                        <div class="justifyLeft w-100p">
-                            <h4>使用说明:</h4>
-                            <p>1. 启用捕获功能。</p>
-                            <p>2. 发送一条消息以捕获提示词结构。</p>
-                            <p>3. 使用"导出提示词结构"按钮导出为JSON文件，或者启用"自动导出"在每次发送消息后自动导出。</p>
-                            <p>4. 使用"查看提示词结构"按钮可以直接在界面中查看结构内容。</p>
+    try {
+        console.log(`${extensionName} 插件正在初始化...`);
+        
+        // 设置HTML
+        const settingsHtml = `
+            <div class="prompt-exporter-settings">
+                <div class="inline-drawer">
+                    <div class="inline-drawer-toggle inline-drawer-header">
+                        <b>Prompt结构导出</b>
+                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                    </div>
+                    <div class="inline-drawer-content">
+                        <div class="prompt-exporter-block flex-container">
+                            <label class="checkbox_label flex-container">
+                                <input id="prompt_exporter_enabled" type="checkbox" />
+                                <span>启用捕获</span>
+                            </label>
+                            <label class="checkbox_label flex-container">
+                                <input id="prompt_exporter_auto_download" type="checkbox" />
+                                <span>自动下载捕获的提示词结构</span>
+                            </label>
+                            <label class="checkbox_label flex-container">
+                                <input id="prompt_exporter_log_console" type="checkbox" />
+                                <span>在控制台显示调试日志</span>
+                            </label>
                         </div>
+                        
+                        <div class="prompt-exporter-block flex-container">
+                            <div id="prompt_exporter_status" class="prompt-exporter-status">
+                                <div>状态：加载中...</div>
+                            </div>
+                        </div>
+                        
+                        <div class="prompt-exporter-buttons">
+                            <input id="prompt_exporter_view_button" class="menu_button" type="button" value="查看当前结构" />
+                            <input id="prompt_exporter_export_button" class="menu_button" type="button" value="导出为文件" />
+                            <input id="prompt_exporter_errors_button" class="menu_button" type="button" value="查看错误历史" />
+                        </div>
+                        
+                        <hr class="sysHR" />
                     </div>
                 </div>
             </div>
-        </div>
-    </div>`;
-
-    // 添加设置到扩展设置面板
-    $('#extensions_settings').append(settingsHtml);
-    
-    // 绑定事件处理函数
-    $('#prompt_exporter_enabled').on('change', onEnabledChange);
-    $('#prompt_auto_export').on('change', onAutoExportChange);
-    $('#prompt_export_location').on('input', onExportLocationChange);
-    $('#prompt_export_button').on('click', onExportButtonClick);
-    $('#prompt_view_button').on('click', onViewStructureClick);
-    
-    // 加载设置并设置事件监听器
-    loadSettings();
-    setupEventListeners();
-    
-    console.log(`${extensionName}: 插件初始化完成`);
+        `;
+        
+        // 添加设置到设置面板
+        $("#extensions_settings").append(settingsHtml);
+        
+        // 加载设置
+        loadSettings();
+        
+        // 初始化事件监听器
+        initEventListeners();
+        
+        // 更新初始状态UI
+        updateStatusUI();
+        
+        console.log(`${extensionName} 插件初始化完成！`);
+    } catch (error) {
+        console.error(`${extensionName} 插件初始化失败:`, error);
+    }
 });
